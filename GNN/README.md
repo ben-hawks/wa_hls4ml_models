@@ -24,13 +24,40 @@ The code in this repository is organized as follows:
 - `training_scripts/`: Contains the scripts for training the GNN models.
 - `utils/`: Contains utility functions for data loading, processing, and plotting.
 - `Dataset_to_csvs6_with_ii.py`: Script to process the dataset.
-- `DatasetGNN.py`: Script to process the dataset.
+- `Dataset3LogNorm.py`: PyTorch Geometric dataset and dataloaders (graph construction and normalization).
+- `load_pretrained.py`: Loads a trained checkpoint (e.g. the `gnn-weights-v1` release) and optionally evaluates it on the test split.
 
 To train a GNN model, you can run the corresponding script in the `training_scripts/` directory. For example, to train the baseline GNN model, you can run:
 
 ```bash
 python training_scripts/y_03_baseline.py
 ```
+
+To reproduce the released `gnn-weights-v1` model (GATv2, 5 layers, 5 heads, hidden dim 512, no log transform), run:
+
+```bash
+python training_scripts/y_03_GAT_vanilla_bigboi.py
+```
+
+## Pretrained Weights
+
+The `gnn-weights-v1` release contains a checkpoint trained with `training_scripts/y_03_GAT_vanilla_bigboi.py`. To load it:
+
+```python
+from load_pretrained import load_pretrained_model
+
+model, checkpoint = load_pretrained_model("path/to/checkpoint.pth", device="cpu")
+```
+
+Or, from the command line, load the checkpoint and evaluate it on the test split:
+
+```bash
+python load_pretrained.py path/to/checkpoint.pth \
+    --data-dir /path/to/Full_dataset_processed_split \
+    --stats results/normalization_stats_01.npy
+```
+
+The model was trained with `USE_LOG_TRANSFORM = False`, so inputs and outputs are normalized with `normalization_stats_01.npy`. If that file is not available, `load_pretrained.py` recomputes it from the training split (the same way the training script does) and saves it to the `--stats` path.
 
 ## Dataset
 

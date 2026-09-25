@@ -5,13 +5,14 @@ from torch_geometric.data import Data, Batch
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import copy
 import os
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from Models import FPGA_GNN_GATv2, FPGA_GNN_GATv2_Enhanced
 # from Dataset2 import create_dataloaders_from_split_data  # Updated import
-from DatasetGNN import create_dataloaders_from_split_data, FPGAGraphDataset
+from Dataset3LogNorm import create_dataloaders_from_split_data, FPGAGraphDataset
 from utils.Utils import generate_all_plots, calculate_metrics, save_metrics_to_file
 
 
@@ -312,7 +313,7 @@ def train_gatv2_gnn(output_dir='results/GATv2_results', use_enhanced_model=False
         # Early stopping and best model saving
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            best_model_state = model.state_dict().copy()
+            best_model_state = copy.deepcopy(model.state_dict())
             patience_counter = 0
                 
             # Save checkpoint
