@@ -41,23 +41,23 @@ python training_scripts/y_03_GAT_vanilla_bigboi.py
 
 ## Pretrained Weights
 
-The `gnn-weights-v1` release contains a checkpoint trained with `training_scripts/y_03_GAT_vanilla_bigboi.py`. To load it:
+The `gnn-weights-v1` checkpoint (trained with `training_scripts/y_03_GAT_vanilla_bigboi.py`) is attached to the [`gnn-weights-v1` release](https://github.com/jdweitz/wa_hls4ml_models/releases/tag/gnn-weights-v1) as [`gnn_final_model.pth`](https://github.com/jdweitz/wa_hls4ml_models/releases/download/gnn-weights-v1/gnn_final_model.pth). To load it:
 
 ```python
 from load_pretrained import load_pretrained_model
 
-model, checkpoint = load_pretrained_model("path/to/checkpoint.pth", device="cpu")
+model, checkpoint = load_pretrained_model("gnn_final_model.pth", device="cpu")
 ```
 
 Or, from the command line, load the checkpoint and evaluate it on the test split:
 
 ```bash
-python load_pretrained.py path/to/checkpoint.pth \
+python load_pretrained.py gnn_final_model.pth \
     --data-dir /path/to/Full_dataset_processed_split \
-    --stats results/normalization_stats_01.npy
+    --stats /path/to/normalization_stats_01.npy
 ```
 
-The model was trained with `USE_LOG_TRANSFORM = False`, so inputs and outputs are normalized with `normalization_stats_01.npy`. If that file is not available, `load_pretrained.py` recomputes it from the training split (the same way the training script does) and saves it to the `--stats` path.
+**Normalization stats:** the model was trained with `USE_LOG_TRANSFORM = False`, and its inputs/outputs must be normalized with the exact `normalization_stats_01.npy` used during training. The training script reuses `./results/normalization_stats_01.npy` if it already exists, so the stats the released checkpoint was trained with are *not* the ones obtained by recomputing them from the current training split: with recomputed stats the checkpoint reaches R2 of about -0.19 on the test split instead of the 0.89 stored in `checkpoint['test_metrics']`. The original stats file is required to reproduce the reported results.
 
 ## Dataset
 

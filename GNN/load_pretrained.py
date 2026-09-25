@@ -91,6 +91,8 @@ def evaluate_on_test_set(model, data_dir, stats_path, device='cpu', batch_size=1
     else:
         # Stats are computed from the training split, exactly as during training
         print("No normalization stats file given; computing them from the training split...")
+        print("WARNING: results are only meaningful with the normalization stats the checkpoint "
+              "was trained with; recomputed stats may not match them.")
         train_dataset = FPGAGraphDataset(train_features, train_labels, stats=None)
         stats = (train_dataset.feature_means, train_dataset.feature_stds,
                  train_dataset.label_means, train_dataset.label_stds)
@@ -124,8 +126,8 @@ if __name__ == "__main__":
     parser.add_argument('--data-dir', default=None,
                         help="Directory with {train,test}_{features,labels}.npy; evaluates on the test split if given")
     parser.add_argument('--stats', default=None,
-                        help="Normalization stats .npy (e.g. results/normalization_stats_01.npy); "
-                             "computed from the training split and saved here if missing")
+                        help="Normalization stats .npy used during training (e.g. results/normalization_stats_01.npy); "
+                             "if missing, recomputed from the training split and saved here")
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     args = parser.parse_args()
 
