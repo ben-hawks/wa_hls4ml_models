@@ -54,7 +54,8 @@ DROPOUT_RATE = 0.3
 # Add log transformation parameters
 USE_LOG_TRANSFORM = True  # Set to True to enable log transformation
 LOG_EPSILON = 1e-6       # Small value to add before log transform
-STATS_PATH = './results/normalization_stats_log.npy' if USE_LOG_TRANSFORM else './results/normalization_stats_01.npy'
+# Stored next to the data so stats computed for one label set (e.g. HLS estimates vs. post-synthesis) are never reused for another
+STATS_PATH = os.path.join(image_data_path, 'normalization_stats_log.npy' if USE_LOG_TRANSFORM else 'normalization_stats_01.npy')
 
 
 # Before running training

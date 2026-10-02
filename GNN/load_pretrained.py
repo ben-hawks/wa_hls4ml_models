@@ -16,6 +16,7 @@ import argparse
 import os
 import sys
 
+import numpy as np
 import torch
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -114,6 +115,9 @@ def evaluate_on_test_set(model, data_dir, stats_path, device='cpu', batch_size=1
             predictions.append(model(batch).cpu())
             targets.append(batch.y.squeeze(1).cpu())
     predictions = test_dataset.denormalize_labels(torch.cat(predictions, dim=0))
+    # Cap at the largest training label, as the training script does
+    label_max = torch.tensor(np.load(train_labels).max(axis=0), dtype=torch.float)
+    predictions = torch.minimum(predictions, label_max)
     targets = test_dataset.denormalize_labels(torch.cat(targets, dim=0))
 
     feature_names = ['CYCLES', 'FF', 'LUT', 'BRAM', 'DSP', 'II']

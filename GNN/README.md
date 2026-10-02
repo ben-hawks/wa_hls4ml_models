@@ -33,11 +33,22 @@ To train a GNN model, you can run the corresponding script in the `training_scri
 python training_scripts/y_03_baseline.py
 ```
 
-To reproduce the released `gnn-weights-v1` model (GATv2, 5 layers, 5 heads, hidden dim 512, no log transform), run:
+`training_scripts/y_03_GAT_vanilla_bigboi.py` trains the GNN described in the paper (`FPGA_GNN_GATv2`: 5 GATv2 layers, 5 heads, hidden dim 512) with plain MSE, log-scaled labels and up to 200 epochs with early stopping:
 
 ```bash
-python training_scripts/y_03_GAT_vanilla_bigboi.py
+python training_scripts/y_03_GAT_vanilla_bigboi.py \
+    --data-dir ../dataset/output/hf_split_resource_report \
+    --output-dir results/gat_vanilla_resource_report
 ```
+
+- Normalization stats are saved to and reused from `<data-dir>/normalization_stats_log.npy` (or `normalization_stats_01.npy` without the log transform), so each dataset keeps its own.
+- `last_checkpoint.pth` is written after every epoch; rerun the same command with `--resume` to continue after a crash.
+- `--epochs` and `--batch-size` override the defaults (200 and 1024).
+- Test predictions are capped at the largest training label.
+
+To reproduce the released `gnn-weights-v1` model, add `--no-log-transform --epochs 1500`.
+
+The model retrained on post-synthesis `resource_report` labels, its metrics and a comparison with the paper are in [`../resource_report_results/`](../resource_report_results/README.md).
 
 ## Pretrained Weights
 
