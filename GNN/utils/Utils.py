@@ -121,7 +121,7 @@ import torch.nn.functional as F
 #     return metrics
 
 def generate_all_plots(model, dataset, train_loader, test_loader, train_losses, val_losses, 
-                      output_dir="results", device=None, test_features_path=None):
+                      output_dir="results", device=None, test_features_path=None, label_max=None):
     """
     Generate all plots for the trained GNN model.
     
@@ -135,8 +135,9 @@ def generate_all_plots(model, dataset, train_loader, test_loader, train_losses, 
         output_dir: Directory to save plots
         device: Device to run inference on
         test_features_path: Path to test features for model type classification
+        label_max: Optional per-target cap applied to denormalized predictions
     """
-    
+
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
@@ -171,6 +172,9 @@ def generate_all_plots(model, dataset, train_loader, test_loader, train_losses, 
     # Denormalize for interpretable plots
     test_predictions_denorm = dataset.denormalize_labels(test_predictions).numpy()
     test_targets_denorm = dataset.denormalize_labels(test_targets).numpy()
+    if label_max is not None:
+        # Same cap as the reported test metrics, so plots and metrics describe one evaluation
+        test_predictions_denorm = np.minimum(test_predictions_denorm, np.asarray(label_max))
 
     # Get model types for colored plotting
     model_types = None

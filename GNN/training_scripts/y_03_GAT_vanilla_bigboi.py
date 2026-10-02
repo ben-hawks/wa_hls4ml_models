@@ -506,7 +506,8 @@ def train_gatv2_gnn(output_dir='results/GATv2_results', use_enhanced_model=False
         train_losses=train_losses,
         val_losses=val_losses,
         output_dir=output_dir,
-        device=device
+        device=device,
+        label_max=label_max
     )
 
     # 9. Save final model

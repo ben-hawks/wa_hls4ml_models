@@ -80,26 +80,19 @@ def evaluate_on_test_set(model, data_dir, stats_path, device='cpu', batch_size=1
     from Dataset3LogNorm import FPGAGraphDataset
     from utils.Utils import calculate_metrics
 
-    train_features = os.path.join(data_dir, 'train_features.npy')
     train_labels = os.path.join(data_dir, 'train_labels.npy')
     test_features = os.path.join(data_dir, 'test_features.npy')
     test_labels = os.path.join(data_dir, 'test_labels.npy')
 
-    if stats_path and os.path.exists(stats_path):
-        feature_means, feature_stds, label_means, label_stds, use_log, log_eps, log_shift = \
-            FPGAGraphDataset.load_normalization_stats(stats_path)
-        stats = (feature_means, feature_stds, label_means, label_stds)
-    else:
-        # Stats are computed from the training split, exactly as during training
-        print("No normalization stats file given; computing them from the training split...")
-        print("WARNING: results are only meaningful with the normalization stats the checkpoint "
-              "was trained with; recomputed stats may not match them.")
-        train_dataset = FPGAGraphDataset(train_features, train_labels, stats=None)
-        stats = (train_dataset.feature_means, train_dataset.feature_stds,
-                 train_dataset.label_means, train_dataset.label_stds)
-        use_log, log_eps, log_shift = False, 1e-6, None
-        if stats_path:
-            train_dataset.save_normalization_stats(stats_path)
+    # Checkpoints don't record the label transform (log scaling, epsilon) or the statistics,
+    # so recomputing them can silently normalize differently from training
+    if not stats_path or not os.path.exists(stats_path):
+        raise FileNotFoundError(
+            f"Normalization stats file not found: {stats_path!r}. Pass the stats file the checkpoint "
+            "was trained with (written by the training script, e.g. <data-dir>/normalization_stats_log.npy).")
+    feature_means, feature_stds, label_means, label_stds, use_log, log_eps, log_shift = \
+        FPGAGraphDataset.load_normalization_stats(stats_path)
+    stats = (feature_means, feature_stds, label_means, label_stds)
 
     test_dataset = FPGAGraphDataset(
         test_features, test_labels, stats=stats,
@@ -130,10 +123,12 @@ if __name__ == "__main__":
     parser.add_argument('--data-dir', default=None,
                         help="Directory with {train,test}_{features,labels}.npy; evaluates on the test split if given")
     parser.add_argument('--stats', default=None,
-                        help="Normalization stats .npy used during training (e.g. results/normalization_stats_01.npy); "
-                             "if missing, recomputed from the training split and saved here")
+                        help="Normalization stats .npy the checkpoint was trained with "
+                             "(e.g. normalization_stats_log.npy); required with --data-dir")
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     args = parser.parse_args()
+    if args.data_dir and not args.stats:
+        parser.error("--stats is required with --data-dir")
 
     model, checkpoint = load_pretrained_model(args.checkpoint, device=args.device)
     print(f"Loaded {type(model).__name__} from {args.checkpoint}")
