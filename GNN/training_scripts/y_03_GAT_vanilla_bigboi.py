@@ -5,6 +5,7 @@ from torch_geometric.data import Data, Batch
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import argparse
 import copy
 import os
 import sys
@@ -17,7 +18,7 @@ from utils.Utils import generate_all_plots, calculate_metrics, save_metrics_to_f
 
 
 #!!!!!! CHANGE THIS FOLDER NAME TO YOUR OWN FOLDER NAME !!!!!!!#
-SAVE_FOLDERNAME = 'results/y_03_LGAT_enhanced1'
+SAVE_FOLDERNAME = 'results/y_03_GAT_vanilla_bigboi'
 # CHANGE THIS FOLDER NAME TO YOUR OWN FOLDER NAME !!!!!!!#
 
 # Extract the part after the first '/' for folder_base
@@ -27,7 +28,20 @@ SAVE_FOLDERNAME = 'results/y_03_LGAT_enhanced1'
 
 
 # image_data_path = '/app/dataset/Full_dataset_processed_split/'
-image_data_path = '/dima-pvc/wa_hls4ml_models/dataset/Full_dataset_processed_split/'
+# image_data_path = '/dima-pvc/wa_hls4ml_models/dataset/Full_dataset_processed_split/'
+_parser = argparse.ArgumentParser()
+_parser.add_argument("--data-dir", type=str, default='/dima-pvc/wa_hls4ml_models/dataset/Full_dataset_processed_split/',
+                     help="Directory with {train,val,test}_{features,labels}.npy (e.g. output of Dataset_to_csvs6_with_ii.py --hf-root)")
+_parser.add_argument("--output-dir", type=str, default=SAVE_FOLDERNAME, help="Directory for checkpoints, metrics and plots")
+_parser.add_argument("--epochs", type=int, default=200,
+                     help="Maximum number of epochs (200 as in the paper; gnn-weights-v1 used 1500), with early stopping")
+_parser.add_argument("--batch-size", type=int, default=1024, help="Batch size")
+_parser.add_argument("--no-log-transform", action="store_true",
+                     help="Train on z-scored labels without log scaling, as gnn-weights-v1 was")
+_parser.add_argument("--resume", action="store_true",
+                     help="Resume training from <output-dir>/last_checkpoint.pth")
+args = _parser.parse_args()
+image_data_path = args.data_dir
 
 TRAIN_FEATURES_PATH = os.path.join(image_data_path, 'train_features.npy')
 TRAIN_LABELS_PATH = os.path.join(image_data_path, 'train_labels.npy')
@@ -38,21 +52,22 @@ TEST_LABELS_PATH = os.path.join(image_data_path, 'test_labels.npy')
 
 
 # Training configuration
-BATCH_SIZE = 2048
+BATCH_SIZE = args.batch_size
 LEARNING_RATE = 3e-3
-NUM_EPOCHS = 500
+NUM_EPOCHS = args.epochs
 WEIGHT_DECAY = 5e-6
 
-GNN_HIDDEN_DIM = 128
-GNN_NUM_LAYERS = 4
-NUM_ATTENTION_HEADS = 4
-MLP_HIDDEN_DIM = 160
+GNN_HIDDEN_DIM = 512
+GNN_NUM_LAYERS = 5
+NUM_ATTENTION_HEADS = 5
+MLP_HIDDEN_DIM = 512
 DROPOUT_RATE = 0.3
+
 
 
 # Normalization stats path (will be created if doesn't exist)
 # Add log transformation parameters
-USE_LOG_TRANSFORM = True  # Set to True to enable log transformation
+USE_LOG_TRANSFORM = not args.no_log_transform  # log scaling before z-score, as described in the paper
 LOG_EPSILON = 1e-6       # Small value to add before log transform
 # Stored next to the data so stats computed for one label set (e.g. HLS estimates vs. post-synthesis) are never reused for another
 STATS_PATH = os.path.join(image_data_path, 'normalization_stats_log.npy' if USE_LOG_TRANSFORM else 'normalization_stats_01.npy')
@@ -90,8 +105,9 @@ def train_epoch(model, train_loader, optimizer, criterion, device):
     
     return total_loss / num_batches
 
-def evaluate(model, data_loader, criterion, device, dataset, denormalize=True):
-    """Evaluate the model on given data loader."""
+def evaluate(model, data_loader, criterion, device, dataset, denormalize=True, label_max=None):
+    """Evaluate the model on given data loader. With label_max, denormalized predictions are
+    capped at it (the largest training label) so rare log-space extrapolations stay physical."""
     model.eval()
     total_loss = 0
     num_batches = 0
@@ -123,11 +139,13 @@ def evaluate(model, data_loader, criterion, device, dataset, denormalize=True):
     if denormalize:
         all_predictions = dataset.denormalize_labels(all_predictions)
         all_targets = dataset.denormalize_labels(all_targets)
+        if label_max is not None:
+            all_predictions = torch.minimum(all_predictions, label_max)
     
     avg_loss = total_loss / num_batches
     return avg_loss, all_predictions, all_targets
 
-def train_gatv2_gnn(output_dir='results/GATv2_results', use_enhanced_model=False):
+def train_gatv2_gnn(output_dir='results/GATv2_results', use_enhanced_model=False, resume=False):
     print(f"\nUsing Enhanced GATv2 model: {use_enhanced_model}")
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -221,13 +239,14 @@ def train_gatv2_gnn(output_dir='results/GATv2_results', use_enhanced_model=False
     #     log_epsilon=LOG_EPSILON
     # )
     
+    label_max = torch.tensor(np.load(TRAIN_LABELS_PATH).max(axis=0), dtype=torch.float)
     print(f"DataLoaders created successfully")
     print(f"Node feature dimension: {node_feature_dim}")
     print(f"Number of targets: {num_targets}")
     print(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}, Test batches: {len(test_loader)}")
     
     # Print dataset sizes
-    train_size = len(train_loader) * BATCH_SIZE
+    train_size = len(train_loader.dataset) if hasattr(train_loader, 'dataset') else len(train_loader) * BATCH_SIZE
     val_size = len(val_loader.dataset) if hasattr(val_loader, 'dataset') else len(val_loader) * BATCH_SIZE
     test_size = len(test_loader.dataset) if hasattr(test_loader, 'dataset') else len(test_loader) * BATCH_SIZE
     print(f"Approximate dataset sizes - Train: {train_size:,}, Val: {val_size:,}, Test: {test_size:,}")
@@ -292,12 +311,29 @@ def train_gatv2_gnn(output_dir='results/GATv2_results', use_enhanced_model=False
     best_val_loss = float('inf')
     best_model_state = None
     patience_counter = 0
-    early_stopping_patience = 15
+    early_stopping_patience = 40
+    start_epoch = 0
+    last_checkpoint_path = f'{output_dir}/last_checkpoint.pth'
+
+    if resume:
+        print(f"Resuming from {last_checkpoint_path}")
+        state = torch.load(last_checkpoint_path, map_location=device, weights_only=False)
+        model.load_state_dict(state['model_state_dict'])
+        optimizer.load_state_dict(state['optimizer_state_dict'])
+        scheduler.load_state_dict(state['scheduler_state_dict'])
+        best_val_loss = state['best_val_loss']
+        best_model_state = state['best_model_state']
+        patience_counter = state['patience_counter']
+        train_losses = state['train_losses']
+        val_losses = state['val_losses']
+        start_epoch = state['epoch'] + 1
+        print(f"Resuming at epoch {start_epoch} (best val loss {best_val_loss:.6e}, patience {patience_counter})")
+    epoch = start_epoch - 1  # defined even if no epochs remain to run
     
     # Define feature names
     feature_names = ['CYCLES', 'FF', 'LUT', 'BRAM', 'DSP', 'II'] 
 
-    for epoch in tqdm(range(NUM_EPOCHS), desc="Epochs", unit="epoch", disable=True):
+    for epoch in tqdm(range(start_epoch, NUM_EPOCHS), desc="Epochs", unit="epoch", disable=True):
         # Training
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
         train_losses.append(train_loss)
@@ -362,14 +398,28 @@ def train_gatv2_gnn(output_dir='results/GATv2_results', use_enhanced_model=False
         # Test reports every 5 epochs
         if epoch % 5 == 0 or epoch == NUM_EPOCHS - 1:
             test_loss_norm, test_pred, test_targets = evaluate(
-                model, test_loader, criterion, device, dataset, denormalize=True
+                model, test_loader, criterion, device, dataset, denormalize=True, label_max=label_max
             )
             test_loss = test_loss_norm.item() if isinstance(test_loss_norm, torch.Tensor) else test_loss_norm
-            print(f"    --> TEST Epoch {epoch:3d} - Test Loss (denormalized): {test_loss:.4e}")
+            print(f"    --> TEST Epoch {epoch:3d} - Test Loss (normalized): {test_loss:.4e}")
             test_metrics = calculate_metrics(test_pred, test_targets, feature_names)
             overall_formatted = {k: f"{v:.3e}" for k, v in test_metrics['overall'].items()}
             print(f"    --> overall metrics: {overall_formatted}")
         
+        # Save full training state every epoch so the run can be resumed
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'best_val_loss': best_val_loss,
+            'best_model_state': best_model_state,
+            'patience_counter': patience_counter,
+            'train_losses': train_losses,
+            'val_losses': val_losses,
+        }, last_checkpoint_path + '.tmp')
+        os.replace(last_checkpoint_path + '.tmp', last_checkpoint_path)  # atomic, so a crash mid-save keeps the previous checkpoint
+
         # Early stopping
         if patience_counter >= early_stopping_patience:
             print(f"Early stopping at epoch {epoch} (patience: {early_stopping_patience})")
@@ -387,7 +437,7 @@ def train_gatv2_gnn(output_dir='results/GATv2_results', use_enhanced_model=False
 
     # Test set evaluation
     test_loss_norm, test_pred, test_targets = evaluate(
-        model, test_loader, criterion, device, dataset, denormalize=True
+        model, test_loader, criterion, device, dataset, denormalize=True, label_max=label_max
     )
 
     test_metrics = calculate_metrics(test_pred, test_targets, feature_names)
@@ -430,9 +480,9 @@ def train_gatv2_gnn(output_dir='results/GATv2_results', use_enhanced_model=False
         'weight_decay': WEIGHT_DECAY,
         'best_val_loss': best_val_loss,
         'dataset_sizes': {
-            'train': 440650,  # From your output
-            'val': 94537,
-            'test': 94430
+            'train': train_size,
+            'val': val_size,
+            'test': test_size
         }
     }
 
@@ -456,7 +506,8 @@ def train_gatv2_gnn(output_dir='results/GATv2_results', use_enhanced_model=False
         train_losses=train_losses,
         val_losses=val_losses,
         output_dir=output_dir,
-        device=device
+        device=device,
+        label_max=label_max
     )
 
     # 9. Save final model
@@ -484,11 +535,11 @@ def train_gatv2_gnn(output_dir='results/GATv2_results', use_enhanced_model=False
         'plot_metrics': plot_metrics,
         'feature_names': feature_names,
         'dataset_info': {
-            'train_size': 440650,
-            'val_size': 94537,
-            'test_size': 94430,
-            'max_layers': 51,  # From your train data
-            'num_features': 18
+            'train_size': train_size,
+            'val_size': val_size,
+            'test_size': test_size,
+            'max_layers': dataset.features_np.shape[1],
+            'num_features': dataset.features_np.shape[2]
         }
     }, final_model_path)
     print(f"\nModel saved to: {final_model_path}")
@@ -498,7 +549,7 @@ def train_gatv2_gnn(output_dir='results/GATv2_results', use_enhanced_model=False
 
 if __name__ == "__main__":
     # folder_name = 'results/y_01_GAT_simple_bigger'
-    folder_name = SAVE_FOLDERNAME
+    folder_name = args.output_dir
 
     # Create results folder if it doesn't exist
     if not os.path.exists(folder_name):
@@ -507,7 +558,8 @@ if __name__ == "__main__":
     # Train with the new pre-split data approach
     model, dataset, train_losses, val_losses, test_metrics = train_gatv2_gnn(
         output_dir=folder_name, 
-        use_enhanced_model=True
+        use_enhanced_model=False,
+        resume=args.resume
     )
     
     print(f"\nTraining completed! Results saved to: {folder_name}")

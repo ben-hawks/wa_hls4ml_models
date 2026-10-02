@@ -24,13 +24,51 @@ The code in this repository is organized as follows:
 - `training_scripts/`: Contains the scripts for training the GNN models.
 - `utils/`: Contains utility functions for data loading, processing, and plotting.
 - `Dataset_to_csvs6_with_ii.py`: Script to process the dataset.
-- `DatasetGNN.py`: Script to process the dataset.
+- `Dataset3LogNorm.py`: PyTorch Geometric dataset and dataloaders (graph construction and normalization).
+- `load_pretrained.py`: Loads a trained checkpoint (e.g. the `gnn-weights-v1` release) and optionally evaluates it on the test split.
 
 To train a GNN model, you can run the corresponding script in the `training_scripts/` directory. For example, to train the baseline GNN model, you can run:
 
 ```bash
 python training_scripts/y_03_baseline.py
 ```
+
+`training_scripts/y_03_GAT_vanilla_bigboi.py` trains the GNN described in the paper (`FPGA_GNN_GATv2`: 5 GATv2 layers, 5 heads, hidden dim 512) with plain MSE, log-scaled labels and up to 200 epochs with early stopping:
+
+```bash
+python training_scripts/y_03_GAT_vanilla_bigboi.py \
+    --data-dir ../dataset/output/hf_split_resource_report \
+    --output-dir results/gat_vanilla_resource_report
+```
+
+- Normalization stats are saved to and reused from `<data-dir>/normalization_stats_log.npy` (or `normalization_stats_01.npy` without the log transform), so each dataset keeps its own.
+- `last_checkpoint.pth` is written after every epoch; rerun the same command with `--resume` to continue after a crash.
+- `--epochs` and `--batch-size` override the defaults (200 and 1024).
+- Test predictions are capped at the largest training label.
+
+To reproduce the released `gnn-weights-v1` model, add `--no-log-transform --epochs 1500`.
+
+The model retrained on post-synthesis `resource_report` labels, its metrics and a comparison with the paper are in [`../resource_report_results/`](../resource_report_results/README.md).
+
+## Pretrained Weights
+
+The `gnn-weights-v1` checkpoint (trained with `training_scripts/y_03_GAT_vanilla_bigboi.py`) is attached to the [`gnn-weights-v1` release](https://github.com/jdweitz/wa_hls4ml_models/releases/tag/gnn-weights-v1) as [`gnn_final_model.pth`](https://github.com/jdweitz/wa_hls4ml_models/releases/download/gnn-weights-v1/gnn_final_model.pth). To load it:
+
+```python
+from load_pretrained import load_pretrained_model
+
+model, checkpoint = load_pretrained_model("gnn_final_model.pth", device="cpu")
+```
+
+Or, from the command line, load the checkpoint and evaluate it on the test split:
+
+```bash
+python load_pretrained.py gnn_final_model.pth \
+    --data-dir /path/to/Full_dataset_processed_split \
+    --stats /path/to/normalization_stats_01.npy
+```
+
+**Normalization stats:** the model was trained with `USE_LOG_TRANSFORM = False`, and its inputs/outputs must be normalized with the exact `normalization_stats_01.npy` used during training. The training script reuses `./results/normalization_stats_01.npy` if it already exists, so the stats the released checkpoint was trained with are *not* the ones obtained by recomputing them from the current training split: with recomputed stats the checkpoint reaches R2 of about -0.19 on the test split instead of the 0.89 stored in `checkpoint['test_metrics']`. The original stats file is required to reproduce the reported results.
 
 ## Dataset
 

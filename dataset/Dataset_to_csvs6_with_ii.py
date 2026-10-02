@@ -105,8 +105,14 @@ IO_TYPE_MAPPING = {
 class ModelProcessor:
     """Process neural network model JSON configurations and convert to CSV format."""
     
-    def __init__(self):
-        """Initialize the ModelProcessor with feature column definitions."""
+    def __init__(self, resource_key: str = "resource_report"):
+        """Initialize the ModelProcessor with feature column definitions.
+
+        Args:
+            resource_key: JSON key to read resource labels from. "resource_report" holds the
+                post-logic-synthesis (Vivado) numbers, "hls_resource_report" holds the HLS estimates.
+        """
+        self.resource_key = resource_key
         # self.feature_columns = [
         #     "d_in1", "d_in2", "d_in3", "d_out1", "d_out2", "d_out3", 
         #     "prec", "rf", "strategy", "rf_times_precision", "layer_type", 
@@ -139,9 +145,9 @@ class ModelProcessor:
             with open(file_path, 'r') as file:
                 content = file.read()
                 
-            # Quick check for hls_resource_report pattern (since that's where the data actually is)
+            # Quick check for the resource report pattern before full JSON parsing
             import re
-            pattern = r'"hls_resource_report":\s*{[^{}]*[^}]+}'
+            pattern = r'"%s":\s*{[^{}]*[^}]+}' % re.escape(self.resource_key)
             if not re.search(pattern, content):
                 return False
             
@@ -157,11 +163,7 @@ class ModelProcessor:
                 if len(data) == 0:
                     return False
                 data = data[0]
-            hls_resource_report = data.get('hls_resource_report', {})
-            
-            # Check if it has at least one of the expected fields with non-empty string values
-            return any(key in hls_resource_report and hls_resource_report[key] 
-                      for key in ["ff", "lut", "bram", "dsp"])
+            return self.has_valid_resources(data)
         
             # # Check if it has at least three of the expected fields with non-zero values
             # zero_count = 0
@@ -177,6 +179,12 @@ class ModelProcessor:
             logger.error(f"Error checking resource report in {file_path}: {e}")
             return False
     
+    def has_valid_resources(self, data: Dict) -> bool:
+        """Check if a single model record has a non-empty resource report under self.resource_key."""
+        res = data.get(self.resource_key) or {}
+        # Check if it has at least one of the expected fields with non-empty string values
+        return any(key in res and res[key] for key in ["ff", "lut", "bram", "dsp"])
+
     def load_json(self, file_path: str) -> Dict:
         """Load a JSON file and return its contents as a dictionary.
         
@@ -240,7 +248,7 @@ class ModelProcessor:
     def get_resource_report(self, data: Dict) -> Dict[str, int]:
         """Extract resource usage information from the data."""
         lat = data.get("latency_report", {})
-        hls_res = data.get("hls_resource_report", {})
+        res = data.get(self.resource_key, {})
 
         def to_int(val):
             try:
@@ -256,10 +264,11 @@ class ModelProcessor:
 
         return {
             "cycles_max": to_int(lat.get("cycles_max", 0)),
-            "ff": to_int(hls_res.get("ff", 0)),
-            "lut": to_int(hls_res.get("lut", 0)),
-            "bram": to_int(hls_res.get("bram", 0)),  # or to_float if you expect fractions
-            "dsp": to_int(hls_res.get("dsp", 0)),
+            "ff": to_int(res.get("ff", 0)),
+            "lut": to_int(res.get("lut", 0)),
+            # post-synthesis BRAM counts can be fractional (BRAM18 = 0.5 BRAM36)
+            "bram": to_float(res.get("bram", 0)),
+            "dsp": to_int(res.get("dsp", 0)),
             "interval_max": to_int(lat.get("interval_max", 0))
         }
     
@@ -437,15 +446,26 @@ class ModelProcessor:
         """
         logger.info(f"Processing file: {file_path}")
         
-        # Create empty DataFrame
-        input_features = pd.DataFrame(columns=self.feature_columns)
-        
         # Load data
         try:
             data = self.load_json(file_path)
         except Exception as e:
             logger.error(f"Failed to load JSON data: {e}")
-            return input_features, {}
+            return pd.DataFrame(columns=self.feature_columns), {}
+        
+        return self.process_record(data)
+
+    def process_record(self, data: Dict) -> Tuple[pd.DataFrame, Dict[str, int]]:
+        """Convert a single model record (one entry of a JSON file) to a DataFrame and get resource report.
+
+        Args:
+            data: Dictionary containing the model data
+
+        Returns:
+            Tuple of (features_dataframe, resource_report_dict)
+        """
+        # Create empty DataFrame
+        input_features = pd.DataFrame(columns=self.feature_columns)
         
         # Get resource report for labels
         resource_report = self.get_resource_report(data)
@@ -902,12 +922,123 @@ class ModelProcessor:
         
         return X_path, y_path
 
+    def build_arrays(self, all_features: List[pd.DataFrame], all_labels: List[Dict],
+                     max_layers: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
+        """Pack per-model feature DataFrames and label dicts into padded NumPy arrays (padding = -1)."""
+        if max_layers is None:
+            max_layers = max(len(df) for df in all_features)
+        num_models = len(all_features)
+        num_features = len(self.feature_columns)
+        num_labels = len(self.label_columns)
+
+        X = np.full((num_models, max_layers, num_features), -1, dtype=float)
+        y = np.zeros((num_models, num_labels), dtype=float)
+
+        for i, (features_df, resource_report) in enumerate(zip(all_features, all_labels)):
+            num_layers = len(features_df)
+            for j, feature_name in enumerate(self.feature_columns):
+                X[i, :num_layers, j] = features_df[feature_name].values
+            for j, label_name in enumerate(self.label_columns):
+                y[i, j] = resource_report[label_name]
+
+        return X, y
+
+    def process_merged_files(self, file_paths: List[str]) -> Tuple[List[pd.DataFrame], List[Dict]]:
+        """Process merged JSON files (each a list of model records, as on HuggingFace).
+
+        Records without a valid resource report under self.resource_key are skipped.
+        """
+        all_features = []
+        all_labels = []
+        skipped = 0
+        for file_path in file_paths:
+            with open(file_path, 'r') as file:
+                records = json.load(file)
+            if isinstance(records, dict):
+                records = [records]
+            for data in tqdm(records, desc=Path(file_path).name, unit="model"):
+                if not isinstance(data, dict) or not self.has_valid_resources(data):
+                    skipped += 1
+                    continue
+                try:
+                    features_df, resource_report = self.process_record(data)
+                except Exception as e:
+                    logger.error(f"Error processing record in {file_path}: {e}")
+                    skipped += 1
+                    continue
+                all_features.append(features_df)
+                all_labels.append(resource_report)
+        print(f"Processed {len(all_features)} models, skipped {skipped} without valid '{self.resource_key}'")
+        return all_features, all_labels
+
+    def process_hf_splits(self, dataset_root: str, output_dir: str,
+                          splits: Tuple[str, ...] = ("train", "val", "test"),
+                          skip_existing: bool = False) -> None:
+        """Process the HuggingFace wa-hls4ml layout (<root>/<split>/*.json) into
+        <output_dir>/<split>_features.npy and <split>_labels.npy, as expected by the training scripts.
+
+        All splits are padded to the same number of layers. With skip_existing, splits whose
+        output files already exist are not reprocessed, and the remaining splits are padded to
+        the layer count of the existing arrays.
+        """
+        existing_layers = None
+        if skip_existing:
+            remaining = []
+            for split in splits:
+                X_path = os.path.join(output_dir, f"{split}_features.npy")
+                y_path = os.path.join(output_dir, f"{split}_labels.npy")
+                if os.path.exists(X_path) and os.path.exists(y_path):
+                    existing_layers = np.load(X_path, mmap_mode='r').shape[1]
+                    print(f"[{split}] Skipping, found {X_path} and {y_path}")
+                else:
+                    remaining.append(split)
+            splits = tuple(remaining)
+            if not splits:
+                print("All splits already exist, nothing to do")
+                return
+
+        per_split = {}
+        for split in splits:
+            files = sorted(glob.glob(os.path.join(dataset_root, split, "*.json")))
+            print(f"[{split}] {len(files)} JSON files")
+            per_split[split] = self.process_merged_files(files)
+
+        max_layers = max(len(df) for feats, _ in per_split.values() for df in feats)
+        if existing_layers is not None:
+            if max_layers > existing_layers:
+                raise ValueError(f"New splits need {max_layers} layers but existing arrays have {existing_layers}; "
+                                 f"rerun without skip_existing")
+            max_layers = existing_layers
+        print(f"Padding all splits to {max_layers} layers")
+        for split, (feats, labels) in per_split.items():
+            X, y = self.build_arrays(feats, labels, max_layers=max_layers)
+            X_path, y_path = self.save_numpy_arrays(X, y, output_dir, prefix=split)
+            print(f"[{split}] Saved features {X.shape} to {X_path} and labels {y.shape} to {y_path}")
+
 if __name__ == "__main__":
     import glob
     import os
     from pathlib import Path
-    
-    processor = ModelProcessor()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--hf-root", type=str, default=None,
+                        help="Root of the HuggingFace wa-hls4ml download (containing train/ val/ test/). "
+                             "If given, writes <split>_features.npy / <split>_labels.npy to --output-dir.")
+    parser.add_argument("--output-dir", type=str, default=None, help="Directory to save the NumPy arrays")
+    parser.add_argument("--resource-key", choices=["resource_report", "hls_resource_report"],
+                        default="resource_report",
+                        help="Label source: post-logic-synthesis (resource_report) or HLS estimates (hls_resource_report)")
+    parser.add_argument("--skip-existing", action="store_true",
+                        help="With --hf-root, skip splits whose <split>_features.npy / <split>_labels.npy already exist")
+    args = parser.parse_args()
+
+    processor = ModelProcessor(resource_key=args.resource_key)
+
+    if args.hf_root is not None:
+        processor.process_hf_splits(args.hf_root, args.output_dir or f"output/hf_split_{args.resource_key}/",
+                                    skip_existing=args.skip_existing)
+        raise SystemExit(0)
     
     # Use the new process_folders function
     # folder_paths = [
@@ -954,7 +1085,7 @@ if __name__ == "__main__":
     # ]
     # output_dir = "./May_28_processed_newest_dataset_with_iotype_latency_only/"
 
-    output_dir = "output/May_29_CONV_ONLY/"
+    output_dir = args.output_dir or "output/May_29_CONV_ONLY/"
     
     # Process folders and save combined numpy arrays (skip CSV files)
     X_path, y_path = processor.process_folders(

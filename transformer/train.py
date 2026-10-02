@@ -15,16 +15,31 @@ def train_model(
     num_epochs=10,
     verbose=True,
     checkpoint_path: str = None,
+    resume_state: dict = None,
 ):
+    """Train the model, checkpointing the best model (model.pt) and the latest state
+    (last_checkpoint.pt) to checkpoint_path. Pass resume_state (a loaded last_checkpoint.pt)
+    to continue a previous run; num_epochs is the total number of epochs, including the resumed ones."""
     best_val = float('inf')
     train_losses = []
     val_losses = []
+    start_epoch = 1
+
+    if resume_state is not None:
+        model.load_state_dict(resume_state["model"])
+        optimizer.load_state_dict(resume_state["optimizer"])
+        best_val = resume_state["best_val"]
+        train_losses = list(resume_state["train_losses"])
+        val_losses = list(resume_state["val_losses"])
+        start_epoch = resume_state["epoch"] + 1
+        if verbose:
+            print(f"Resuming from epoch {resume_state['epoch']} (best val={best_val:.4f})")
 
     # make sure checkpoint dir exists
     if checkpoint_path is not None:
         os.makedirs(checkpoint_path, exist_ok=True)
 
-    for epoch in range(1, num_epochs + 1):
+    for epoch in range(start_epoch, num_epochs + 1):
         # Training
         model.train()
         train_loss = 0.0
@@ -60,6 +75,19 @@ def train_model(
             torch.save(model.state_dict(), ckpt_file)
             if verbose:
                 print(f"  ↳ New best model (val={val_loss:.4f}), saved to {ckpt_file}")
+
+        # Save full training state every epoch so the run can be resumed
+        if checkpoint_path is not None:
+            last_file = os.path.join(checkpoint_path, "last_checkpoint.pt")
+            torch.save({
+                "epoch": epoch,
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "best_val": best_val,
+                "train_losses": train_losses,
+                "val_losses": val_losses,
+            }, last_file + ".tmp")
+            os.replace(last_file + ".tmp", last_file)  # atomic, so a crash mid-save keeps the previous checkpoint
 
     return train_losses, val_losses
 

@@ -1,0 +1,87 @@
+============================================================
+MODEL EVALUATION METRICS
+============================================================
+
+MODEL CONFIGURATION:
+------------------------------
+node_feature_dim: 33
+num_targets: 6
+hidden_dim: 512
+num_gnn_layers: 5
+num_attention_heads: 5
+mlp_hidden_dim: 512
+dropout_rate: 0.3
+model_type: FPGA_GNN_GATv2
+
+TRAINING CONFIGURATION:
+------------------------------
+batch_size: 1024
+learning_rate: 0.003
+final_epochs: 106
+weight_decay: 5e-06
+best_val_loss: 0.07486463615998298
+dataset_sizes: {'train': 433676, 'val': 92992, 'test': 92933}
+
+OVERALL METRICS:
+------------------------------
+MAE: 7.807362e+03
+MSE: 2.645072e+10
+RMSE: 1.626368e+05
+MAPE: 89057928.00%
+SMAPE: 24.78%
+R2: 8.217643e-01
+
+PER-FEATURE METRICS:
+------------------------------
+
+CYCLES:
+  MAE: 1.983686e+04
+  MSE: 8.175848e+10
+  RMSE: 2.859344e+05
+  MAPE: 16.88%
+  SMAPE: 17.95%
+  R2: 8.146049e-01
+
+FF:
+  MAE: 3.368601e+03
+  MSE: 8.284578e+07
+  RMSE: 9.101966e+03
+  MAPE: 171326208.00%
+  SMAPE: 14.06%
+  R2: 9.346957e-01
+
+LUT:
+  MAE: 5.164857e+03
+  MSE: 3.185442e+08
+  RMSE: 1.784781e+04
+  MAPE: 28.16%
+  SMAPE: 13.99%
+  R2: 9.010550e-01
+
+BRAM:
+  MAE: 1.867776e+00
+  MSE: 8.220457e+01
+  RMSE: 9.066674e+00
+  MAPE: 16606762.00%
+  SMAPE: 27.90%
+  R2: 6.399292e-01
+
+DSP:
+  MAE: 3.271764e+01
+  MSE: 1.574163e+05
+  RMSE: 3.967572e+02
+  MAPE: 346414528.00%
+  SMAPE: 60.08%
+  R2: 5.631186e-01
+
+II:
+  MAE: 1.843927e+04
+  MSE: 7.654429e+10
+  RMSE: 2.766664e+05
+  MAPE: 17.84%
+  SMAPE: 14.69%
+  R2: 8.265448e-01
+
+============================================================
+End of Metrics Report
+============================================================
