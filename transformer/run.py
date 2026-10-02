@@ -21,6 +21,11 @@ def main():
     parser.add_argument("--epochs", type=int, default=200, help="Number of epochs to train")
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
     parser.add_argument("--batch-size", type=int, default=512, help="Batch size")
+    parser.add_argument("--data-dir", type=str, default="../dataset/output/split_dataset/result/result/",
+                        help="Directory with {train,val,test}_{features,labels}.npy (e.g. output of Dataset_to_csvs6_with_ii.py --hf-root)")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Run directory (new_results_plots/<run>) to resume training from its best_model/last_checkpoint.pt; "
+                             "--epochs is the total epoch count, including epochs already run")
     args = parser.parse_args()    
 
     timestamp = datetime.now().strftime("%m_%d_%H_%M")
@@ -31,7 +36,9 @@ def main():
     USE_LOG_TRANSFORM = True  # Set to True to enable log transformation
     LOG_EPSILON = 1e-6       # Small value to add before log transform
 
-    if args.eval_only:
+    if args.resume is not None:
+        outdir = args.resume.rstrip("/")
+    elif args.eval_only:
         outdir = f"new_results_plots/testing_only_{timestamp}_{num_epochs}epochs_{learning_rate}lr_{BATCH_SIZE}bs"
     else:
         outdir = f"new_results_plots/{timestamp}_{num_epochs}epochs_{learning_rate}lr_{BATCH_SIZE}bs"
@@ -64,7 +71,7 @@ def main():
     #     )
 
 ## CHANGE BEFORE PUSH
-    base_dir = "../dataset/output/split_dataset/result/result/"  # UPDATE FOR THE JOB WITH NEW PATH
+    base_dir = args.data_dir
     # base_dir = "/jason-pvc/june_wa-hls4ml/result/" # IN THE PVC
 
     train_loader, val_loader, test_loader, node_feature_dim, num_targets = create_dataloaders_from_split_data(
@@ -105,21 +112,34 @@ def main():
         print(f"Loading model weights from: {model_path}")
         model.load_state_dict(torch.load(model_path, map_location=device))
     else:
+        resume_state = None
+        if args.resume is not None:
+            resume_path = os.path.join(best_model_dir, "last_checkpoint.pt")
+            print(f"Loading training state from: {resume_path}")
+            resume_state = torch.load(resume_path, map_location=device)
         # Training
         train_losses, val_losses = train_model(
-            model, train_loader, val_loader, optimizer, loss_fn, device, num_epochs=num_epochs, verbose=True, checkpoint_path=best_model_dir
+            model, train_loader, val_loader, optimizer, loss_fn, device, num_epochs=num_epochs, verbose=True,
+            checkpoint_path=best_model_dir, resume_state=resume_state
         )
         # Plot Loss
         plot_loss(train_losses, val_losses, outdir=os.path.join(outdir, "plots"))
-        # Save best model for convenience
+        # Evaluate the best (lowest val loss) checkpoint, not the final epoch's weights.
+        # The final epoch's weights remain available in last_checkpoint.pt.
         model_path = os.path.join(best_model_dir, "model.pt")
-        torch.save(model.state_dict(), model_path)
+        print(f"Loading best model weights from: {model_path}")
+        model.load_state_dict(torch.load(model_path, map_location=device))
 
     # Test Evaluation
     y_true, y_pred = test_model(model, test_loader, device)
     # For denormalization, use the dataset, not the class
     y_true_denorm = test_loader.dataset.denormalize_labels(torch.tensor(y_true)).numpy()
     y_pred_denorm = test_loader.dataset.denormalize_labels(torch.tensor(y_pred)).numpy()
+    # Cap predictions at the largest training label: for a few inputs the log-space output
+    # extrapolates far past anything physically possible (e.g. millions of DSPs)
+    label_max = np.load(os.path.join(base_dir, "train_labels.npy")).max(axis=0)
+    print(f"Capping {(y_pred_denorm > label_max).sum()} predictions at the training-set maximum")
+    y_pred_denorm = np.minimum(y_pred_denorm, label_max)
 
     # Use for metrics and plotting:
     calculate_metrics(y_true_denorm, y_pred_denorm)
